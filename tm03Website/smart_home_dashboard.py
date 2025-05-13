@@ -23,11 +23,16 @@ import time
 st.set_page_config(layout="wide", page_title="tm03", initial_sidebar_state="collapsed")
 # open sheet
 
+
+
 #fix this, hard coded
 st.sidebar.header("Patients: ")
 
 with open('tm003.txt') as f:
     lines = f.readlines()
+
+
+
 
 data = []
 ######
@@ -40,8 +45,17 @@ for line in lines:
     activity = parts[4]
     data.append([date, time, sensor, status, activity])
 
+
+st.title("Smart Home Dashboard")
+
 df = pd.DataFrame(data, columns=["date", "time", "sensor", "status", "activity"])
-df = df[df['date'] == "2016-11-23"]
+originalDf = df
+
+unique_dates = sorted(originalDf['date'].unique())
+selected_date = st.sidebar.selectbox("Choose a date", unique_dates)
+df = originalDf[originalDf['date'] == selected_date]
+
+#df = df[df['date'] == "2016-11-23"]
 
 
 def draw_overlay(current_room, current_action, time_str=None):
@@ -128,7 +142,7 @@ for _, row in activitydf.iterrows():
     frames.append(rgb_overlay)
 
 
-st.title("Smart Home Dashboard")
+
 
 leftCol, rightCol = st.columns(2)
 
@@ -150,36 +164,139 @@ if st.session_state.page == 'Home':
         activitydf
     
 
+    st.divider()
 
-    df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'])
-    df['activity_block'] = (df['activity'] != df['activity'].shift()).cumsum()
-    start_times = df.groupby('activity_block')['datetime'].first().reset_index()
+    graphLeft, graphRight = st.columns(2)
 
-    # Merge start times into activitydf
-    activitydf = activitydf.copy()
-    activitydf['activity_block'] = activitydf.index + 1  # Match groupby block IDs
-    activitydf = pd.merge(activitydf, start_times, on='activity_block', how='left')
-    activitydf.rename(columns={'datetime': 'start_time'}, inplace=True)
+    with graphLeft:
 
-    # Extract the hour
-    activitydf['hour'] = activitydf['start_time'].dt.floor('H')
+        with st.container():
 
-    # Sum activity_num per hour
-    activitysums_per_hour = activitydf.groupby('hour')['activity_num'].sum().reset_index()
+            st.subheader("Daytime vs Nightime Bathroom")
 
-    # Display
-    st.write("Activities by Hour:")
-    st.dataframe(activitysums_per_hour)
+            # Ensure datetime exists
+            df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'])
 
-    chart = alt.Chart(activitysums_per_hour).mark_bar().encode(
-    x=alt.X('hour:T', title='Hour'),
-    y=alt.Y('activity_num:Q', title='Activity'),
-    tooltip=['hour', 'activity_num']
-    ).properties(
-    width=700,
-    height=400,
-    title='Total Activity Events per Hour'
-    )
+            # Define bathroom-related sensor keywords
+            bathroom_keywords = ['BathroomA']
+            bathroom_df = df[df['sensor'].str.contains('|'.join(bathroom_keywords))]
 
-    # Display in Streamlit
-    st.altair_chart(chart, use_container_width=True)
+            # Define time period (Daytime: 07:00–21:00, Nighttime: 21:00–07:00)
+            def get_time_period(dt):
+                hour = dt.hour
+                return 'Daytime' if 7 <= hour < 21 else 'Nighttime'
+
+            bathroom_df['period'] = bathroom_df['datetime'].apply(get_time_period)
+
+            # Count ON/OFF per period
+            summary = bathroom_df.groupby(['period', 'status']).size().unstack(fill_value=0).reset_index()
+            #summary = summary['status'] != "OFF"
+            summary = summary.drop('OFF', axis = 1)
+            # Show table
+            #st.dataframe(summary)
+
+            # Optional: Altair bar chart
+            bar_chart = alt.Chart(summary.melt(id_vars='period')).mark_bar().encode(
+                x='period:N',
+                y= alt.Y('value:Q',scale=alt.Scale(domain=[0, 1000])),
+                color='status:N',
+                column='status:N'
+            ).properties(
+            width=400,
+            height=300
+            #title='Bathroom Activity'
+            )
+
+            st.altair_chart(bar_chart, use_container_width=False)
+
+    with graphRight:
+        with st.container():
+            df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'])
+            df['activity_block'] = (df['activity'] != df['activity'].shift()).cumsum()
+            start_times = df.groupby('activity_block')['datetime'].first().reset_index()
+
+            # Merge start times into activitydf
+            activitydf = activitydf.copy()
+            activitydf['activity_block'] = activitydf.index + 1  # Match groupby block IDs
+            activitydf = pd.merge(activitydf, start_times, on='activity_block', how='left')
+            activitydf.rename(columns={'datetime': 'start_time'}, inplace=True)
+
+            # Extract the hour
+            activitydf['hour'] = activitydf['start_time'].dt.floor('H')
+
+            # Sum activity_num per hour
+            activitysums_per_hour = activitydf.groupby('hour')['activity_num'].sum().reset_index()
+
+            # Display
+
+            #DATAFRAME
+            #st.write("Activities by Hour:")
+            #st.dataframe(activitysums_per_hour)
+
+            chart = alt.Chart(activitysums_per_hour).mark_bar().encode(
+            x=alt.X('hour:T', title='Hour'),
+            y=alt.Y('activity_num:Q', title='Activity', scale=alt.Scale(domain=[0, 1000])),
+            tooltip=['hour', 'activity_num']
+            ).properties(
+            width=400,
+            height=400,
+            title='Total Activity Events per Hour'
+            )
+            st.subheader("Overall Activity")
+            # Display in Streamlit
+            st.altair_chart(chart, use_container_width=True)
+    st.divider()
+    with st.container():
+        alldf = originalDf
+        alldf['activity_block'] = (alldf['activity'] != alldf['activity'].shift()).cumsum()
+        alldf = originalDf[originalDf['activity'] != originalDf['activity'].shift()].reset_index(drop=True)
+
+        # Make sure timestamp is in datetime format
+        alldf['time'] = pd.to_datetime(alldf['time'])
+
+        # Calculate duration until the next activity
+        alldf['time'] = alldf['time'].shift(-1) - alldf['time']
+
+        # Optional: convert to seconds
+        alldf['time'] = alldf['time'].dt.total_seconds()
+        #activitydf['time'] = pd.to_timedelta(activitydf['time'], unit='s')
+
+        counts = originalDf['activity_block'].value_counts().sort_index().reset_index(drop=True)
+        alldf['activity_num'] = counts
+
+        alldf = originalDf.copy()
+
+        # Identify activity blocks
+        alldf['activity_block'] = (alldf['activity'] != alldf['activity'].shift()).cumsum()
+
+        # Keep only transitions
+        alldf = alldf[alldf['activity'] != alldf['activity'].shift()].reset_index(drop=True)
+
+        # Create datetime from date and time (start of activity)
+        alldf['datetime'] = pd.to_datetime(alldf['date'] + ' ' + alldf['time'])
+
+        # Shift to get duration between transitions
+        alldf['duration'] = alldf['datetime'].shift(-1) - alldf['datetime']
+        alldf['duration_sec'] = alldf['duration'].dt.total_seconds()
+
+        # Extract day for grouping
+        alldf['day'] = alldf['datetime'].dt.date
+
+        # Group by day and sum duration
+        daily_activity = alldf.groupby('day')['duration_sec'].sum().reset_index()
+
+        # Optional: convert to minutes
+        daily_activity['duration_min'] = daily_activity['duration_sec'] / 60
+
+        chart = alt.Chart(daily_activity).mark_bar().encode(
+            x=alt.X('day:T', title='Date'),
+            y=alt.Y('duration_min:Q', title='Total Activity'),
+            tooltip=['day', 'duration_min']
+        ).properties(
+            title='Total Activity per Day',
+            width=700,
+            height=400
+        )
+
+        st.altair_chart(chart, use_container_width=True)
+
